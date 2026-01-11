@@ -41,9 +41,7 @@ func ReadFile(path string) (*MGTemplate, error) {
 	}, nil
 }
 
-/* =========================
-   Variáveis
-   ========================= */
+// Variáveis
 
 func (t *MGTemplate) Var(name string, value any) {
 	t.context[name] = value
@@ -53,9 +51,7 @@ func (t *MGTemplate) VarExists(name string) bool {
 	return strings.Contains(t.source, "{{"+name+"}}")
 }
 
-/* =========================
-   Include
-   ========================= */
+// Include
 
 func (t *MGTemplate) IncludeFile(varname, path string) error {
 	data, err := os.ReadFile(path)
@@ -72,9 +68,7 @@ func (t *MGTemplate) IncludeFile(varname, path string) error {
 	return nil
 }
 
-/* =========================
-   Seções
-   ========================= */
+// Seções
 
 func (t *MGTemplate) Section(name string) {
 	ctx := map[string]any{}
@@ -84,9 +78,7 @@ func (t *MGTemplate) Section(name string) {
 	t.sectionCalls[name] = append(t.sectionCalls[name], ctx)
 }
 
-/* =========================
-   Render
-   ========================= */
+// Render
 
 func (t *MGTemplate) Render() string {
 	out := t.source
@@ -194,9 +186,7 @@ func (t *MGTemplate) renderSection(html, name string, calls []map[string]any) st
 	return html
 }
 
-/* =========================
-   Engine
-   ========================= */
+// Engine
 
 func (t *MGTemplate) interpolate(input string) string {
 	var out strings.Builder
@@ -236,9 +226,7 @@ func (t *MGTemplate) evaluate(expr string) string {
 	return value
 }
 
-/* =========================
-   Cleanup
-   ========================= */
+// Cleanup
 
 func (t *MGTemplate) cleanup(html string) string {
 	for _, r := range cleanupRegexps {
@@ -247,9 +235,7 @@ func (t *MGTemplate) cleanup(html string) string {
 	return html
 }
 
-/* =========================
-   Resolve
-   ========================= */
+// Resolve
 
 func (t *MGTemplate) resolve(path string) string {
 	segments := strings.Split(path, ".")
@@ -313,9 +299,7 @@ func (t *MGTemplate) resolve(path string) string {
 	return strings.TrimSpace(fmt.Sprint(current))
 }
 
-/* =========================
-   Filtros
-   ========================= */
+// Filtros
 
 func transform(value, op string) string {
 	switch strings.ToLower(op) {
@@ -330,9 +314,7 @@ func transform(value, op string) string {
 	}
 }
 
-/* =========================
-   Utils
-   ========================= */
+// Utils
 
 func normalize(s string) string {
 	var b strings.Builder
