@@ -1,6 +1,6 @@
 // Copyright (C) 2026 Murilo Gomes Julio
 // SPDX-License-Identifier: MIT
-
+//
 // Site: https://mugomes.github.io
 
 package mgtemplate
@@ -14,154 +14,227 @@ import (
 )
 
 type MGTemplate struct {
-	source     string
-	context    map[string]any
-	blocks     map[string]string
-	blockAccum map[string]string
+	source string
+
+	// variável global do template
+	context map[string]any
+
+	// seção encontrados no template
+	sections map[string]string
+
+	// valores acumulados por seção (snapshot do contexto)
+	sectionsAccum map[string][]map[string]any
 }
 
+// ReadFile carrega um arquivo de template
 func ReadFile(path string) (*MGTemplate, error) {
-	sHTML, err := os.ReadFile(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
 
 	return &MGTemplate{
-		source:     string(sHTML),
-		context:    map[string]any{},
-		blocks:     map[string]string{},
-		blockAccum: map[string]string{},
+		source:        string(data),
+		context:       map[string]any{},
+		sections:      map[string]string{},
+		sectionsAccum: map[string][]map[string]any{},
 	}, nil
 }
 
-func (e *MGTemplate) IncludeFile(varname string, path string) error {
-	sHTML, err := os.ReadFile(path)
+// IncludeFile inclui o conteúdo de outro arquivo no template
+func (t *MGTemplate) IncludeFile(varname, path string) error {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
 
-	e.source = strings.ReplaceAll(e.source, "{{"+varname+"}}", string(sHTML))
+	t.source = strings.ReplaceAll(
+		t.source,
+		"{{"+varname+"}}",
+		string(data),
+	)
 
 	return nil
 }
 
-func (e *MGTemplate) Var(name string, value any) {
-	e.context[name] = value
+// Var define uma variável no contexto global
+func (t *MGTemplate) Var(name string, value any) {
+	t.context[name] = value
 }
 
-func (e *MGTemplate) VarExists(name string) bool {
-	if strings.Contains(e.source, "{{"+name+"}}") {
-		return true
-	}
-
-	return false
+// VarExists verifica se a variável aparece no template
+func (t *MGTemplate) VarExists(name string) bool {
+	return strings.Contains(t.source, "{{"+name+"}}")
 }
 
-func (e *MGTemplate) Section(name string) {
-	body, ok := e.blocks[name]
-	if !ok {
-		open := "[[" + name + "]]"
-		close := "[[/" + name + "]]"
+// Section registra uma repetição de seção
+func (t *MGTemplate) Section(name string) {
+	// se o seção ainda não foi identificado, extrai do template
+	corpo, existe := t.sections[name]
+	if !existe {
+		abertura := "[[" + name + "]]"
+		fechamento := "[[/" + name + "]]"
 
-		a := strings.Index(e.source, open)
-		b := strings.Index(e.source, close)
-		if a == -1 || b == -1 || b < a {
+		inicio := strings.Index(t.source, abertura)
+		fim := strings.Index(t.source, fechamento)
+		if inicio == -1 || fim == -1 || fim < inicio {
 			return
 		}
 
-		body = e.source[a+len(open) : b]
-		e.blocks[name] = body
-
-		token := "{{__" + name + "__}}"
-		e.source = e.source[:a] + token + e.source[b+len(close):]
+		corpo = t.source[inicio+len(abertura) : fim]
+		t.sections[name] = corpo
 	}
 
-	e.blockAccum[name] += e.interpolate(body)
+	// cria uma cópia do contexto atual (escopo isolado)
+	snapshot := copiarContexto(t.context)
+	t.sectionsAccum[name] = append(t.sectionsAccum[name], snapshot)
 }
 
-func (e *MGTemplate) Render() string {
-	out := e.source
-	for k, v := range e.blockAccum {
-		out = strings.ReplaceAll(out, "{{__"+k+"__}}", v)
-	}
-	return e.interpolate(out)
-}
+// Render gera o HTML final
+func (t *MGTemplate) Render() string {
+	saida := t.source
 
-func (e *MGTemplate) interpolate(input string) string {
-	var out strings.Builder
+	// resolve seções (do interno para o externo)
 	for {
-		start := strings.Index(input, "{{")
-		if start == -1 {
-			out.WriteString(input)
+		houveMudanca := false
+
+		for nome, corpo := range t.sections {
+			abertura := "[[" + nome + "]]"
+			fechamento := "[[/" + nome + "]]"
+
+			if strings.Contains(saida, abertura) {
+				var resultado strings.Builder
+
+				for _, ctx := range t.sectionsAccum[nome] {
+					resultado.WriteString(
+						substituirVariaveis(corpo, ctx),
+					)
+				}
+
+				saida = substituirSecao(
+					saida,
+					abertura,
+					fechamento,
+					resultado.String(),
+				)
+
+				houveMudanca = true
+			}
+		}
+
+		if !houveMudanca {
+			break
+		}
+	}
+
+	// resolve variáveis finais fora de seções
+	return substituirVariaveis(saida, t.context)
+}
+
+// INTERNAL HELPERS
+
+// cria uma cópia do contexto
+func copiarContexto(orig map[string]any) map[string]any {
+	copia := make(map[string]any, len(orig))
+	for k, v := range orig {
+		copia[k] = v
+	}
+	return copia
+}
+
+// substitui [[SECTION]] pelo conteúdo renderizado
+func substituirSecao(texto, abertura, fechamento, valor string) string {
+	for {
+		a := strings.Index(texto, abertura)
+		b := strings.Index(texto, fechamento)
+		if a == -1 || b == -1 || b < a {
+			break
+		}
+		texto = texto[:a] + valor + texto[b+len(fechamento):]
+	}
+	return texto
+}
+
+// substitui {{variavel}} usando o contexto informado
+func substituirVariaveis(texto string, ctx map[string]any) string {
+	var saida strings.Builder
+
+	for {
+		inicio := strings.Index(texto, "{{")
+		if inicio == -1 {
+			saida.WriteString(texto)
 			break
 		}
 
-		out.WriteString(input[:start])
-		end := strings.Index(input[start:], "}}")
-		if end == -1 {
-			out.WriteString(input)
+		saida.WriteString(texto[:inicio])
+
+		fim := strings.Index(texto[inicio:], "}}")
+		if fim == -1 {
+			saida.WriteString(texto)
 			break
 		}
 
-		expr := input[start+2 : start+end]
-		out.WriteString(e.eval(expr))
+		expressao := texto[inicio+2 : inicio+fim]
+		saida.WriteString(avaliarExpressao(expressao, ctx))
 
-		input = input[start+end+2:]
+		texto = texto[inicio+fim+2:]
 	}
-	return out.String()
+
+	return saida.String()
 }
 
-func (e *MGTemplate) eval(expr string) string {
-	parts := strings.Split(expr, "|")
-	val := e.resolve(parts[0])
+// avalia filtros e resolve o valor final
+func avaliarExpressao(expr string, ctx map[string]any) string {
+	partes := strings.Split(expr, "|")
+	valor := resolverValor(partes[0], ctx)
 
-	for _, m := range parts[1:] {
-		val = transform(val, m)
+	for _, filtro := range partes[1:] {
+		switch strings.ToLower(strings.TrimSpace(filtro)) {
+		case "upper":
+			valor = strings.ToUpper(valor)
+		case "lower":
+			valor = strings.ToLower(valor)
+		case "trim":
+			valor = strings.TrimSpace(valor)
+		}
 	}
-	return val
+
+	return valor
 }
 
-func (e *MGTemplate) resolve(path string) string {
-	segments := strings.Split(path, ".")
-	current, ok := e.context[segments[0]]
-	if !ok {
+// resolve user.name usando reflection
+func resolverValor(caminho string, ctx map[string]any) string {
+	segmentos := strings.Split(strings.TrimSpace(caminho), ".")
+	atual, existe := ctx[segmentos[0]]
+	if !existe {
 		return ""
 	}
 
-	v := reflect.ValueOf(current)
-	for _, seg := range segments[1:] {
-		if v.Kind() == reflect.Pointer {
-			v = v.Elem()
+	valor := reflect.ValueOf(atual)
+	for _, campo := range segmentos[1:] {
+		if valor.Kind() == reflect.Pointer {
+			valor = valor.Elem()
 		}
-		if v.Kind() != reflect.Struct {
+		if valor.Kind() != reflect.Struct {
 			return ""
 		}
 
-		field := v.FieldByNameFunc(func(n string) bool {
-			return normalize(n) == normalize(seg)
+		f := valor.FieldByNameFunc(func(n string) bool {
+			return normalizar(n) == normalizar(campo)
 		})
-		if !field.IsValid() {
+
+		if !f.IsValid() {
 			return ""
 		}
-		v = field
+
+		valor = f
 	}
-	return fmt.Sprint(v.Interface())
+
+	return fmt.Sprint(valor.Interface())
 }
 
-func transform(v, op string) string {
-	switch strings.ToLower(op) {
-	case "upper":
-		return strings.ToUpper(v)
-	case "lower":
-		return strings.ToLower(v)
-	case "trim":
-		return strings.TrimSpace(v)
-	default:
-		return v
-	}
-}
-
-func normalize(s string) string {
+// normaliza nomes para comparação
+func normalizar(s string) string {
 	var b strings.Builder
 	for _, r := range s {
 		if unicode.IsLetter(r) || unicode.IsDigit(r) {
