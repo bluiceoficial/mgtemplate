@@ -9,40 +9,55 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"regexp"
 	"strings"
 	"unicode"
 )
 
-type MGTemplate struct {
-	source string
-
-	// variável global do template
-	context map[string]any
-
-	// seção encontrados no template
-	sections map[string]string
-
-	// valores acumulados por seção (snapshot do contexto)
-	sectionsAccum map[string][]map[string]any
+type MiTemplate struct {
+	source       string
+	context      map[string]any
+	sectionCalls map[string][]map[string]any
 }
 
-// ReadFile carrega um arquivo de template
-func ReadFile(path string) (*MGTemplate, error) {
+var cleanupRegexps = []*regexp.Regexp{
+	regexp.MustCompile(`\[\[[\w _-]+\]\].*?\[\[\/[\w _-]+\]\]`),
+	regexp.MustCompile(`\[\[[\w _-]+\]\]`),
+	regexp.MustCompile(`\[\[\/[\w _-]+\]\]`),
+	regexp.MustCompile(`\{\{__[^}]+__\}\}`),
+	regexp.MustCompile(`\{\{[^}]+\}\}`),
+}
+
+func ReadFile(path string) (*MiTemplate, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
 
-	return &MGTemplate{
-		source:        string(data),
-		context:       map[string]any{},
-		sections:      map[string]string{},
-		sectionsAccum: map[string][]map[string]any{},
+	return &MiTemplate{
+		source:       string(data),
+		context:      map[string]any{},
+		sectionCalls: map[string][]map[string]any{},
 	}, nil
 }
 
-// IncludeFile inclui o conteúdo de outro arquivo no template
-func (t *MGTemplate) IncludeFile(varname, path string) error {
+/* =========================
+   Variáveis
+   ========================= */
+
+func (t *MiTemplate) Var(name string, value any) {
+	t.context[name] = value
+}
+
+func (t *MiTemplate) VarExists(name string) bool {
+	return strings.Contains(t.source, "{{"+name+"}}")
+}
+
+/* =========================
+   Include
+   ========================= */
+
+func (t *MiTemplate) IncludeFile(varname, path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -57,184 +72,269 @@ func (t *MGTemplate) IncludeFile(varname, path string) error {
 	return nil
 }
 
-// Var define uma variável no contexto global
-func (t *MGTemplate) Var(name string, value any) {
-	t.context[name] = value
+/* =========================
+   Seções
+   ========================= */
+
+func (t *MiTemplate) Section(name string) {
+	ctx := map[string]any{}
+	for k, v := range t.context {
+		ctx[k] = v
+	}
+	t.sectionCalls[name] = append(t.sectionCalls[name], ctx)
 }
 
-// VarExists verifica se a variável aparece no template
-func (t *MGTemplate) VarExists(name string) bool {
-	return strings.Contains(t.source, "{{"+name+"}}")
-}
+/* =========================
+   Render
+   ========================= */
 
-// Section registra uma repetição de seção
-func (t *MGTemplate) Section(name string) {
-	// se o seção ainda não foi identificado, extrai do template
-	corpo, existe := t.sections[name]
-	if !existe {
-		abertura := "[[" + name + "]]"
-		fechamento := "[[/" + name + "]]"
+func (t *MiTemplate) Render() string {
+	out := t.source
 
-		inicio := strings.Index(t.source, abertura)
-		fim := strings.Index(t.source, fechamento)
-		if inicio == -1 || fim == -1 || fim < inicio {
-			return
-		}
-
-		corpo = t.source[inicio+len(abertura) : fim]
-		t.sections[name] = corpo
+	// 1️⃣ Renderiza apenas seções chamadas
+	for name, calls := range t.sectionCalls {
+		out = t.renderSection(out, name, calls)
 	}
 
-	// cria uma cópia do contexto atual (escopo isolado)
-	snapshot := copiarContexto(t.context)
-	t.sectionsAccum[name] = append(t.sectionsAccum[name], snapshot)
+	// 2️⃣ REMOVE blocos que NÃO foram chamados (comportamento PHP)
+	out = t.removeUnusedSections(out)
+
+	// 3️⃣ Interpola variáveis
+	out = t.interpolate(out)
+
+	// 4️⃣ Limpeza final
+	return t.cleanup(out)
 }
 
-// Render gera o HTML final
-func (t *MGTemplate) Render() string {
-	saida := t.source
-
-	// resolve seções (do interno para o externo)
+func (t *MiTemplate) removeUnusedSections(html string) string {
+	var out strings.Builder
+	pos := 0
 	for {
-		houveMudanca := false
+		relStart := strings.Index(html[pos:], "[[")
+		if relStart < 0 {
+			out.WriteString(html[pos:])
+			break
+		}
+		start := pos + relStart
 
-		for nome, corpo := range t.sections {
-			abertura := "[[" + nome + "]]"
-			fechamento := "[[/" + nome + "]]"
+		endNameRel := strings.Index(html[start+2:], "]]")
+		if endNameRel < 0 {
+			// no closing brackets for opening tag -> copy rest and break
+			out.WriteString(html[pos:])
+			break
+		}
 
-			if strings.Contains(saida, abertura) {
-				var resultado strings.Builder
+		name := strings.TrimSpace(html[start+2 : start+2+endNameRel])
+		openEnd := start + 2 + endNameRel + 2 // position after opening tag
 
-				for _, ctx := range t.sectionsAccum[nome] {
-					resultado.WriteString(
-						substituirVariaveis(corpo, ctx),
-					)
+		// If section was called, keep the opening tag as-is (copy up to opening end)
+		if _, ok := t.sectionCalls[name]; ok {
+			out.WriteString(html[pos:openEnd])
+			pos = openEnd
+			continue
+		}
+
+		// procurar fechamento correspondente a partir do ponto da abertura
+		closeTag := "[[/" + name + "]]"
+		closeRel := strings.Index(html[openEnd:], closeTag)
+		if closeRel < 0 {
+			// abertura órfã -> remove apenas a tag de abertura (não o conteúdo)
+			out.WriteString(html[pos:start])
+			pos = openEnd
+			continue
+		}
+
+		// pular bloco inteiro (remove desde abertura até fechamento)
+		pos = openEnd + closeRel + len(closeTag)
+	}
+	return out.String()
+}
+
+func (t *MiTemplate) renderSection(html, name string, calls []map[string]any) string {
+	open := "[[" + name + "]]"
+	close := "[[/" + name + "]]"
+
+	for {
+		startRel := strings.Index(html, open)
+		if startRel < 0 {
+			break
+		}
+		start := startRel
+
+		// Busca fechamento a partir do fim da abertura
+		searchFrom := start + len(open)
+		endRel := strings.Index(html[searchFrom:], close)
+		if endRel < 0 {
+			break
+		}
+		end := searchFrom + endRel
+
+		body := html[start+len(open) : end]
+		result := strings.Builder{}
+
+		for _, ctx := range calls {
+			original := t.context
+			t.context = ctx
+
+			// renderiza sub-blocos antes
+			inner := body
+			for sub, subCalls := range t.sectionCalls {
+				if sub != name {
+					inner = t.renderSection(inner, sub, subCalls)
 				}
-
-				saida = substituirSecao(
-					saida,
-					abertura,
-					fechamento,
-					resultado.String(),
-				)
-
-				houveMudanca = true
 			}
+
+			result.WriteString(t.interpolate(inner))
+			t.context = original
 		}
 
-		if !houveMudanca {
-			break
-		}
+		html = html[:start] + result.String() + html[end+len(close):]
 	}
 
-	// resolve variáveis finais fora de seções
-	return substituirVariaveis(saida, t.context)
+	return html
 }
 
-// INTERNAL HELPERS
+/* =========================
+   Engine
+   ========================= */
 
-// cria uma cópia do contexto
-func copiarContexto(orig map[string]any) map[string]any {
-	copia := make(map[string]any, len(orig))
-	for k, v := range orig {
-		copia[k] = v
-	}
-	return copia
-}
-
-// substitui [[SECTION]] pelo conteúdo renderizado
-func substituirSecao(texto, abertura, fechamento, valor string) string {
-	for {
-		a := strings.Index(texto, abertura)
-		b := strings.Index(texto, fechamento)
-		if a == -1 || b == -1 || b < a {
-			break
-		}
-		texto = texto[:a] + valor + texto[b+len(fechamento):]
-	}
-	return texto
-}
-
-// substitui {{variavel}} usando o contexto informado
-func substituirVariaveis(texto string, ctx map[string]any) string {
-	var saida strings.Builder
+func (t *MiTemplate) interpolate(input string) string {
+	var out strings.Builder
 
 	for {
-		inicio := strings.Index(texto, "{{")
-		if inicio == -1 {
-			saida.WriteString(texto)
+		start := strings.Index(input, "{{")
+		if start < 0 {
+			out.WriteString(input)
 			break
 		}
 
-		saida.WriteString(texto[:inicio])
+		out.WriteString(input[:start])
 
-		fim := strings.Index(texto[inicio:], "}}")
-		if fim == -1 {
-			saida.WriteString(texto)
+		end := strings.Index(input[start:], "}}")
+		if end < 0 {
+			out.WriteString(input)
 			break
 		}
 
-		expressao := texto[inicio+2 : inicio+fim]
-		saida.WriteString(avaliarExpressao(expressao, ctx))
+		expr := strings.TrimSpace(input[start+2 : start+end])
+		out.WriteString(t.evaluate(expr))
 
-		texto = texto[inicio+fim+2:]
+		input = input[start+end+2:]
 	}
 
-	return saida.String()
+	return out.String()
 }
 
-// avalia filtros e resolve o valor final
-func avaliarExpressao(expr string, ctx map[string]any) string {
-	partes := strings.Split(expr, "|")
-	valor := resolverValor(partes[0], ctx)
+func (t *MiTemplate) evaluate(expr string) string {
+	parts := strings.Split(expr, "|")
+	value := t.resolve(strings.TrimSpace(parts[0]))
 
-	for _, filtro := range partes[1:] {
-		switch strings.ToLower(strings.TrimSpace(filtro)) {
-		case "upper":
-			valor = strings.ToUpper(valor)
-		case "lower":
-			valor = strings.ToLower(valor)
-		case "trim":
-			valor = strings.TrimSpace(valor)
-		}
+	for _, f := range parts[1:] {
+		value = transform(value, strings.TrimSpace(f))
 	}
 
-	return valor
+	return value
 }
 
-// resolve user.name usando reflection
-func resolverValor(caminho string, ctx map[string]any) string {
-	segmentos := strings.Split(strings.TrimSpace(caminho), ".")
-	atual, existe := ctx[segmentos[0]]
-	if !existe {
+/* =========================
+   Cleanup
+   ========================= */
+
+func (t *MiTemplate) cleanup(html string) string {
+	for _, r := range cleanupRegexps {
+		html = r.ReplaceAllString(html, "")
+	}
+	return html
+}
+
+/* =========================
+   Resolve
+   ========================= */
+
+func (t *MiTemplate) resolve(path string) string {
+	segments := strings.Split(path, ".")
+	current, ok := t.context[segments[0]]
+	if !ok {
 		return ""
 	}
 
-	valor := reflect.ValueOf(atual)
-	for _, campo := range segmentos[1:] {
-		if valor.Kind() == reflect.Pointer {
-			valor = valor.Elem()
+	for _, seg := range segments[1:] {
+
+		// array / map
+		if m, ok := current.(map[string]any); ok {
+			current = m[seg]
+			continue
 		}
-		if valor.Kind() != reflect.Struct {
+
+		// valor simples → NÃO quebra
+		rv := reflect.ValueOf(current)
+		if rv.Kind() != reflect.Struct && rv.Kind() != reflect.Pointer {
 			return ""
 		}
 
-		f := valor.FieldByNameFunc(func(n string) bool {
-			return normalizar(n) == normalizar(campo)
-		})
-
-		if !f.IsValid() {
-			return ""
+		if rv.Kind() == reflect.Pointer {
+			rv = rv.Elem()
 		}
 
-		valor = f
+		// propriedade pública
+		if rv.Kind() == reflect.Struct {
+			field := rv.FieldByNameFunc(func(name string) bool {
+				return normalize(name) == normalize(seg)
+			})
+
+			if field.IsValid() {
+				current = field.Interface()
+				continue
+			}
+
+			// getter GetX
+			for i := 0; i < rv.NumMethod(); i++ {
+				m := rv.Type().Method(i)
+				if strings.HasPrefix(m.Name, "Get") &&
+					normalize(m.Name[3:]) == normalize(seg) {
+
+					res := rv.Method(i).Call(nil)
+					if len(res) > 0 {
+						current = res[0].Interface()
+						goto next
+					}
+				}
+			}
+		}
+
+		return ""
+	next:
 	}
 
-	return fmt.Sprint(valor.Interface())
+	if current == nil {
+		return ""
+	}
+
+	return strings.TrimSpace(fmt.Sprint(current))
 }
 
-// normaliza nomes para comparação
-func normalizar(s string) string {
+/* =========================
+   Filtros
+   ========================= */
+
+func transform(value, op string) string {
+	switch strings.ToLower(op) {
+	case "upper":
+		return strings.ToUpper(value)
+	case "lower":
+		return strings.ToLower(value)
+	case "trim":
+		return strings.TrimSpace(value)
+	default:
+		return value
+	}
+}
+
+/* =========================
+   Utils
+   ========================= */
+
+func normalize(s string) string {
 	var b strings.Builder
 	for _, r := range s {
 		if unicode.IsLetter(r) || unicode.IsDigit(r) {
