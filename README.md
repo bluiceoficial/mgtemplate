@@ -39,12 +39,16 @@ go get github.com/mugomes/mgtemplate
 
 <h1>{{title|upper}}</h1>
 
-[[ITEM]]
+[[SECAO]]
 <div>
-    <strong>{{user.name}}</strong><br>
-    <small>{{info}}</small>
+	[[ITEM]]
+	<div>
+    	<strong>{{user.name}}</strong><br>
+    	<small>{{info}}</small>
+	</div>
+	[[/ITEM]]
 </div>
-[[/ITEM]]
+[[/SECAO]]
 
 </body>
 </html>
@@ -85,6 +89,8 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		tpl.Var("info", "Informação " + strconv.Itoa(i))
 		tpl.Section("ITEM")
 	}
+
+	tpl.Section("SECAO")
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write([]byte(tpl.Render()))
