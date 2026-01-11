@@ -83,18 +83,18 @@ func (t *MGTemplate) Section(name string) {
 func (t *MGTemplate) Render() string {
 	out := t.source
 
-	// 1️⃣ Renderiza apenas seções chamadas
+	// Renderiza apenas seções chamadas
 	for name, calls := range t.sectionCalls {
 		out = t.renderSection(out, name, calls)
 	}
 
-	// 2️⃣ REMOVE blocos que NÃO foram chamados (comportamento PHP)
+	// REMOVE blocos que NÃO foram chamados (comportamento PHP)
 	out = t.removeUnusedSections(out)
 
-	// 3️⃣ Interpola variáveis
+	// Interpola variáveis
 	out = t.interpolate(out)
 
-	// 4️⃣ Limpeza final
+	// Limpeza final
 	return t.cleanup(out)
 }
 
