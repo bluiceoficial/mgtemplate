@@ -14,7 +14,7 @@ import (
 	"unicode"
 )
 
-type MiTemplate struct {
+type MGTemplate struct {
 	source       string
 	context      map[string]any
 	sectionCalls map[string][]map[string]any
@@ -28,13 +28,13 @@ var cleanupRegexps = []*regexp.Regexp{
 	regexp.MustCompile(`\{\{[^}]+\}\}`),
 }
 
-func ReadFile(path string) (*MiTemplate, error) {
+func ReadFile(path string) (*MGTemplate, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
 
-	return &MiTemplate{
+	return &MGTemplate{
 		source:       string(data),
 		context:      map[string]any{},
 		sectionCalls: map[string][]map[string]any{},
@@ -45,11 +45,11 @@ func ReadFile(path string) (*MiTemplate, error) {
    Variáveis
    ========================= */
 
-func (t *MiTemplate) Var(name string, value any) {
+func (t *MGTemplate) Var(name string, value any) {
 	t.context[name] = value
 }
 
-func (t *MiTemplate) VarExists(name string) bool {
+func (t *MGTemplate) VarExists(name string) bool {
 	return strings.Contains(t.source, "{{"+name+"}}")
 }
 
@@ -57,7 +57,7 @@ func (t *MiTemplate) VarExists(name string) bool {
    Include
    ========================= */
 
-func (t *MiTemplate) IncludeFile(varname, path string) error {
+func (t *MGTemplate) IncludeFile(varname, path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -76,7 +76,7 @@ func (t *MiTemplate) IncludeFile(varname, path string) error {
    Seções
    ========================= */
 
-func (t *MiTemplate) Section(name string) {
+func (t *MGTemplate) Section(name string) {
 	ctx := map[string]any{}
 	for k, v := range t.context {
 		ctx[k] = v
@@ -88,7 +88,7 @@ func (t *MiTemplate) Section(name string) {
    Render
    ========================= */
 
-func (t *MiTemplate) Render() string {
+func (t *MGTemplate) Render() string {
 	out := t.source
 
 	// 1️⃣ Renderiza apenas seções chamadas
@@ -106,7 +106,7 @@ func (t *MiTemplate) Render() string {
 	return t.cleanup(out)
 }
 
-func (t *MiTemplate) removeUnusedSections(html string) string {
+func (t *MGTemplate) removeUnusedSections(html string) string {
 	var out strings.Builder
 	pos := 0
 	for {
@@ -150,7 +150,7 @@ func (t *MiTemplate) removeUnusedSections(html string) string {
 	return out.String()
 }
 
-func (t *MiTemplate) renderSection(html, name string, calls []map[string]any) string {
+func (t *MGTemplate) renderSection(html, name string, calls []map[string]any) string {
 	open := "[[" + name + "]]"
 	close := "[[/" + name + "]]"
 
@@ -198,7 +198,7 @@ func (t *MiTemplate) renderSection(html, name string, calls []map[string]any) st
    Engine
    ========================= */
 
-func (t *MiTemplate) interpolate(input string) string {
+func (t *MGTemplate) interpolate(input string) string {
 	var out strings.Builder
 
 	for {
@@ -225,7 +225,7 @@ func (t *MiTemplate) interpolate(input string) string {
 	return out.String()
 }
 
-func (t *MiTemplate) evaluate(expr string) string {
+func (t *MGTemplate) evaluate(expr string) string {
 	parts := strings.Split(expr, "|")
 	value := t.resolve(strings.TrimSpace(parts[0]))
 
@@ -240,7 +240,7 @@ func (t *MiTemplate) evaluate(expr string) string {
    Cleanup
    ========================= */
 
-func (t *MiTemplate) cleanup(html string) string {
+func (t *MGTemplate) cleanup(html string) string {
 	for _, r := range cleanupRegexps {
 		html = r.ReplaceAllString(html, "")
 	}
@@ -251,7 +251,7 @@ func (t *MiTemplate) cleanup(html string) string {
    Resolve
    ========================= */
 
-func (t *MiTemplate) resolve(path string) string {
+func (t *MGTemplate) resolve(path string) string {
 	segments := strings.Split(path, ".")
 	current, ok := t.context[segments[0]]
 	if !ok {
