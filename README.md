@@ -1,5 +1,8 @@
 # MGTemplate
 
+> [!NOTE]
+> This repository has been migrated to Codeberg, please see: https://codeberg.org/bluice/mgtemplate
+
 MGTemplate é um mecanismo de templates leve escrito em Go, focado em **simplicidade**, **performance** e **controle explícito por código**.
 
 Ele permite separar HTML da lógica da aplicação sem depender de parsing complexo, ASTs ou fases de compilação. O template é interpretado de forma incremental conforme o código executa.
