@@ -1,7 +1,9 @@
 # MGTemplate
 
-> [!NOTE]
-> This repository has been migrated to Codeberg, please see: https://codeberg.org/bluice/mgtemplate
+<!-- Badge opcional para deixar claro visualmente -->
+![Status](https://img.shields.io/badge/status-arquivado--archived-red.svg)
+
+> **Aviso importante:** Esta biblioteca foi **oficialmente arquivada** e não receberá mais atualizações, correções de bugs ou suporte para novas versões.
 
 MGTemplate é um mecanismo de templates leve escrito em Go, focado em **simplicidade**, **performance** e **controle explícito por código**.
 
